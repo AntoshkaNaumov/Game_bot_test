@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
@@ -16,6 +17,8 @@ secondary_kb = InlineKeyboardMarkup().add(
 
 
 third_kb = InlineKeyboardMarkup().add(
+    InlineKeyboardButton('Посмотреть Статистику', callback_data='view_stats')
+).add(
     InlineKeyboardButton('Изменить Статистику', callback_data='change_stats')
 ).add(
     InlineKeyboardButton('Очистить Статистику', callback_data='clear_stats')
@@ -30,8 +33,8 @@ confirmation_kb.add(InlineKeyboardButton('Отменить', callback_data='canc
 
 # Создание клавиатуры с кнопками "Принять" и "Отменить"
 confirmation_kb2 = InlineKeyboardMarkup()
-confirmation_kb2.add(InlineKeyboardButton('Принять', callback_data='accept2'))
-confirmation_kb2.add(InlineKeyboardButton('Отменить', callback_data='cancel2'))
+confirmation_kb2.add(InlineKeyboardButton('Принять статистику', callback_data='accept_stat'))
+confirmation_kb2.add(InlineKeyboardButton('Отменить сохранение', callback_data='cancel_stat'))
 
 
 my_reports_kb = InlineKeyboardMarkup().add(
@@ -62,11 +65,11 @@ def create_proficiency_type_keyboard():
     return keyboard
 
 
-# Функция для создания клавиатуры выбора навыка
 def create_skills_keyboard(skills):
     keyboard = InlineKeyboardMarkup(row_width=1)
     for skill in skills:
         keyboard.add(InlineKeyboardButton(skill, callback_data=f'skill_{skill}'))
+    keyboard.add(InlineKeyboardButton("Ни одного", callback_data='skill_none'))
     return keyboard
 
 
@@ -86,6 +89,7 @@ def create_habits_keyboard(habits):
     keyboard = InlineKeyboardMarkup(row_width=1)
     for habit in habits:
         keyboard.add(InlineKeyboardButton(habit, callback_data=f'habit_{habit}'))
+    keyboard.add(InlineKeyboardButton("Пропустить", callback_data="habit_skip"))  # Добавляем кнопку "Пропустить"
     return keyboard
 
 
@@ -94,4 +98,17 @@ def create_goals_keyboard(goals):
     keyboard = InlineKeyboardMarkup(row_width=1)
     for goal in goals:
         keyboard.add(InlineKeyboardButton(goal, callback_data=f'goal_{goal}'))
+    keyboard.add(InlineKeyboardButton("Пропустить", callback_data="goal_skip"))  # Добавляем кнопку "Пропустить"
+    return keyboard
+
+
+# Функция для создания клавиатуры выбора даты
+def create_date_keyboard():
+    today = datetime.now().date()
+    keyboard = InlineKeyboardMarkup(row_width=7)
+    for i in range(7):
+        date = today - timedelta(days=i)
+        callback_data = date.isoformat()  # Используем ISO-формат для передачи даты
+        button_text = date.strftime('%d.%m.%Y')
+        keyboard.insert(InlineKeyboardButton(button_text, callback_data=callback_data))
     return keyboard
