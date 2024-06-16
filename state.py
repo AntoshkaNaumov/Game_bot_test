@@ -16,6 +16,7 @@ class Report(StatesGroup):
     input_time = State()
     habits_report = State()
     goals_report = State()
+    check_goal = State()  # Добавленное состояние для проверки достижения цели
 
 
 class ChangeStats(StatesGroup):

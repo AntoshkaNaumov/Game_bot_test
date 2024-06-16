@@ -16,7 +16,7 @@ from keyboards import create_proficiency_type_keyboard, create_skills_keyboard, 
 from state import UserInfo, Report, ChangeStats
 
 
-API_TOKEN = '5614902466:AAG5AcR0rd5Yrl-myulxQKQLJvR1n0O6ydI'
+API_TOKEN = '5724887015:AAGJQvbUtyvGkl-nzGJc-6DypgEH6jjqWao'
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -56,11 +56,35 @@ def create_db():
             FOREIGN KEY (user_id) REFERENCES users (user_id)
         )
     ''')
+    # Создание таблицы skills, если она не существует
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS habit_progress (
+        CREATE TABLE IF NOT EXISTS skills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
-            habit TEXT,
-            progress_days INTEGER,
+            skill_name TEXT,
+            xp INTEGER,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+        ''')
+
+    # Создание таблицы habits, если она не существует
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS habits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            habit_name TEXT,
+            progress INTEGER,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+        ''')
+
+    # Создание таблицы goals, если она не существует
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            goal_name TEXT,
+            progress INTEGER,
             FOREIGN KEY (user_id) REFERENCES users (user_id)
         )
     ''')
@@ -142,13 +166,13 @@ async def process_callback_view_stats(callback_query: types.CallbackQuery, state
         today = datetime.now()
         age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
 
-        # Нахождение следующего дня рождения пользователя
-        next_birthday = birth_date.replace(year=today.year)
-        if next_birthday < today:
-            next_birthday = next_birthday.replace(year=today.year + 1)
+        # Нахождение последнего дня рождения пользователя
+        last_birthday = birth_date.replace(year=today.year)
+        if last_birthday > today:
+            last_birthday = last_birthday.replace(year=today.year - 1)
 
-        # Рассчет количества дней до следующего дня рождения
-        days_until_birthday = (next_birthday - today).days
+        # Рассчет количества дней, прошедших с последнего дня рождения
+        days_after_birthday = (today - last_birthday).days
 
         # Форматирование привычек
         habits = habits_str.split(',') if habits_str else []
@@ -158,17 +182,19 @@ async def process_callback_view_stats(callback_query: types.CallbackQuery, state
         goals = goals_str.split('\n') if goals_str else []
         formatted_goals = "\n".join([f"{idx + 1}. {goal.strip()}" for idx, goal in enumerate(goals)])
 
-        # Определение текущей даты и количества дней в текущем месяце
-        current_day = today.day
+        # Определение количества дней в текущем месяце
         days_in_month = (datetime(today.year, today.month % 12 + 1, 1) - datetime(today.year, today.month, 1)).days
+
+        # Определение количества дней в текущем году
+        days_in_year = 366 if today.year % 4 == 0 and (today.year % 100 != 0 or today.year % 400 == 0) else 365
 
         # Формирование сообщения пользователю
         message_text = f"Игрок: {name}\n"
         message_text += f"Возраст: {age} Lvl\n"
-        message_text += f"Дни до следующего дня рождения: {days_until_birthday}/" \
-                        f"{'366' if next_birthday.year % 4 == 0 else '365'} ХР\n"
+        message_text += f"День после дня рождения: {days_after_birthday}/{days_in_year} ХР\n"
         message_text += f"Привычки:\n{formatted_habits if formatted_habits else 'Нет сохраненных привычек'}\n"
-        message_text += f"Прогресс выполнения привычек: {current_day}/{days_in_month} дней\n"
+        message_text += f"Привычки:\n{formatted_habits if formatted_habits else 'Нет сохраненных привычек'}\n"
+        message_text += f"Прогресс выполнения привычек: 0/{days_in_month} дней\n"
         message_text += f"Цели:\n{formatted_goals if formatted_goals else 'Нет сохраненных целей'}"
 
         await bot.answer_callback_query(callback_query.id)
@@ -203,7 +229,7 @@ async def user_birth_date(message: types.Message, state: FSMContext):
     await UserInfo.next()
     await bot.send_message(message.chat.id, 'Класс! Твой текущий Lvl зафиксирован!')
     await asyncio.sleep(2)
-    await bot.send_message(message.chat.id, '3) Какие навыки хочешь прокачать/обрести? (вводите навыки через запятую)\n'
+    await bot.send_message(message.chat.id, '3) Какие навыки хочешь прокачать/обрести? (вводите навыки через запятую, без Lvl)\n'
                                             'PS. Также оцени на каком уровне в том или ином навыке ты находишься прямо сейчас. (На каждом ранге разный уровень сложности прокачки, поэтому старайся отвечать максимально точно)👐.\n'
                                             '0-10 Lvl - "Новичок"\n'
                                             '10-20 Lvl - "Ниже-среднего"\n'
@@ -286,7 +312,7 @@ async def user_goals(message: types.Message, state: FSMContext):
 
     for habit in habits.split(','):
         cursor.execute('''
-            INSERT INTO habit_progress (user_id, habit, progress_days)
+            INSERT INTO habits (user_id, habit_name, progress)
             VALUES (?, ?, ?)
         ''', (user_id, habit.strip(), 0))
 
@@ -348,13 +374,20 @@ async def process_stat_choice(callback_query: types.CallbackQuery, state: FSMCon
         data['stat_to_change'] = callback_query.data.split('_')[1]
     stat_to_change_text = {
         "name": "Никнейм",
-        "birth": "Даты Рождения",
+        "birth": "Дата Рождения",
         "skills": "Навыки",
         "habits": "Привычки",
         "goals": "Цели"
     }
-    await bot.send_message(callback_query.from_user.id,
-                           f"Введите новые данные для {stat_to_change_text[data['stat_to_change']]}:")
+
+    stat_to_change = data['stat_to_change']
+    message_text = f"Введите новые данные для {stat_to_change_text[stat_to_change]}:\n"
+
+    # Добавляем дополнительное пояснение для всех, кроме "name" и "birth"
+    if stat_to_change not in ["name", "birth"]:
+        message_text += "(если несколько значений введите данные через запятую)"
+
+    await bot.send_message(callback_query.from_user.id, message_text)
     await ChangeStats.waiting_for_new_value.set()
 
 
@@ -463,27 +496,59 @@ async def process_callback_view_report(callback_query: types.CallbackQuery):
 
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
+
+    # Получение отчета из базы данных
     cursor.execute('''
         SELECT report_date, skill, proficiency_type, time_spent, habits_observed, habits_not_observed, goals_achieved 
         FROM reports WHERE report_id = ? AND user_id = ?
     ''', (report_id, user_id))
     report = cursor.fetchone()
+
+    # Получение даты создания пользователя
+    cursor.execute('''
+        SELECT creation_date FROM users WHERE user_id = ?
+    ''', (user_id,))
+    creation_date_str = cursor.fetchone()
+
     conn.close()
 
-    if report:
+    if report and creation_date_str:
+        creation_date = datetime.strptime(creation_date_str[0], '%Y-%m-%d')
+        report_date = datetime.strptime(report[0], '%Y-%m-%d')
+        days_passed = (report_date - creation_date).days
+
         report_date, skill, proficiency_type, time_spent, habits_observed, habits_not_observed, goals_achieved = report
+        goals_list = goals_achieved.split(', ')
+
+        # Формирование строки с прогрессом выполнения целей
+        goals_progress = [f"{goal} выполнена на {days_passed}%" for goal in goals_list]
+        # дописать формирование прогресса привычек
         final_message = (
             f"Отчёт от {report_date}\n"
             f"Навык: {skill} (+ {time_spent} ХР, {proficiency_type})\n"
             f"Соблюдены привычки: {habits_observed}\n"
             f"Не соблюдены: {habits_not_observed}\n"
-            f"Цели: {goals_achieved}\n"
+            f"Цели: {'; '.join(goals_progress)}\n"
         )
         await bot.answer_callback_query(callback_query.id)
         await bot.send_message(callback_query.from_user.id, final_message)
     else:
         await bot.answer_callback_query(callback_query.id)
         await bot.send_message(callback_query.from_user.id, "Отчет не найден.")
+
+
+# Функция для вычисления уровня и опыта
+def calculate_level_and_xp(birth_date_str):
+    birth_date = datetime.strptime(birth_date_str, '%d.%m.%Y')
+    today = datetime.now()
+    age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+    next_birthday = birth_date.replace(year=today.year)
+    if next_birthday < today:
+        next_birthday = next_birthday.replace(year=today.year + 1)
+    days_until_birthday = (next_birthday - today).days
+    total_days_in_year = 366 if next_birthday.year % 4 == 0 else 365
+    xp = total_days_in_year - days_until_birthday
+    return age, xp, total_days_in_year
 
 
 # Обработчик для кнопки "Создать Отчет"
@@ -496,12 +561,11 @@ async def process_callback_create_report(callback_query: types.CallbackQuery, st
     cursor = conn.cursor()
 
     # Проверка наличия игровой статистики
-    cursor.execute('SELECT 1 FROM users WHERE user_id = ?', (user_id,))
-    user_has_game_stats = cursor.fetchone() is not None
-
+    cursor.execute('SELECT name, birth, skills, habits, goals FROM users WHERE user_id = ?', (user_id,))
+    user_data = cursor.fetchone()
     conn.close()
 
-    if user_has_game_stats:
+    if user_data:
         await bot.answer_callback_query(callback_query.id)
         await bot.send_message(callback_query.from_user.id, "1) Для какого дня ты хочешь создать отчёт? Выбери дату:",
                                reply_markup=create_date_keyboard())
@@ -509,8 +573,7 @@ async def process_callback_create_report(callback_query: types.CallbackQuery, st
         await state.set_state(Report.choosing_date)
     else:
         await bot.answer_callback_query(callback_query.id)
-        await bot.send_message(callback_query.from_user.id, "Без игровой статистики ты не сможешь создать отчет!"
-                                                            " Создай игровую статистику.",
+        await bot.send_message(callback_query.from_user.id, "Без игровой статистики ты не сможешь создать отчет! Создай игровую статистику.",
                                reply_markup=create_game_stats_kb)
 
 
@@ -551,20 +614,56 @@ async def process_callback_choose_date(callback_query: types.CallbackQuery, stat
 async def add_report_data1(callback_query: types.CallbackQuery, state: FSMContext):
     skill = callback_query.data.split('_')[1]
 
-    # Сохраняем выбранный навык в состоянии пользователя
-    await state.update_data(skill=skill)
+    async with state.proxy() as data:
+        if 'skills' not in data:
+            data['skills'] = []
+        data['skills'].append(skill)
+
+    await bot.answer_callback_query(callback_query.id, f"Навык '{skill}' добавлен. Выберите другие навыки или нажмите 'Дальше'.")
+
+
+# Обработчик для кнопки "Дальше" после выбора навыков
+@dp.callback_query_handler(lambda c: c.data == 'next_skill', state=Report.skills_report)
+async def next_step(callback_query: types.CallbackQuery, state: FSMContext):
+    async with state.proxy() as data:
+        if 'skills' not in data or not data['skills']:
+            data['skills'] = []
 
     await bot.send_message(callback_query.from_user.id, "3) Выберите способ прокачки:",
                            reply_markup=create_proficiency_type_keyboard())
     await state.set_state(Report.method)
 
 
+# Обработчик для пропуска выбора навыка
+@dp.callback_query_handler(lambda c: c.data == 'none_skill', state=Report.skills_report)
+async def skip_skill_selection(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.update_data(skills=[], proficiency_type=None, time_spent=0)  # Обновляем состояние
+
+    # Получение привычек пользователя из базы данных
+    user_id = callback_query.from_user.id
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT habits FROM users WHERE user_id = ?', (user_id,))
+    user_habits = cursor.fetchone()
+    conn.close()
+
+    if user_habits and user_habits[0]:
+        habits = user_habits[0].split(',')
+        async with state.proxy() as data:
+            data['all_habits'] = habits
+        await bot.send_message(callback_query.from_user.id, "3) Поставь галочки к привычкам, которые соблюдал. (можно "
+                                                           "ничего не выбрать)"
+                                                           "По окончании выбора нажми кнопку Дальше",
+                               reply_markup=create_habits_keyboard(habits))
+    else:
+        await bot.send_message(callback_query.from_user.id, "У тебя нет сохранённых привычек!")
+    await state.set_state(Report.habits_report)
+
+
 # Обработчик для выбора способа прокачки
-@dp.callback_query_handler(lambda c: c.data in ['practical_proficiency', 'theoretical_proficiency'],
-                           state=Report.method)
+@dp.callback_query_handler(lambda c: c.data in ['practical_proficiency', 'theoretical_proficiency'], state=Report.method)
 async def process_proficiency_type_choice(callback_query: types.CallbackQuery, state: FSMContext):
-    proficiency_type = "Практическая Прокачка" if callback_query.data == 'practical_proficiency'\
-        else "Теоретическая Прокачка"
+    proficiency_type = "Практическая Прокачка" if callback_query.data == 'practical_proficiency' else "Теоретическая Прокачка"
 
     await state.update_data(proficiency_type=proficiency_type)
 
@@ -599,7 +698,7 @@ async def process_input_time(message: types.Message, state: FSMContext):
         async with state.proxy() as data:
             data['all_habits'] = habits
         await bot.send_message(message.chat.id, "3) Поставь галочки к привычкам, которые соблюдал. (можно "
-                                                "ничего не выбрать)",
+                                                "ничего не выбрать). По окончании выбора нажми кнопку Дальше",
                                reply_markup=create_habits_keyboard(habits))
     else:
         await bot.send_message(message.chat.id, "У тебя нет сохранённых привычек!")
@@ -630,7 +729,10 @@ async def add_report_data3(callback_query: types.CallbackQuery, state: FSMContex
 
     await asyncio.sleep(2)
 
-    # Получение целей пользователя из базы данных
+
+# Обработчик для нажатия кнопки "Дальше" в выборе привычек
+@dp.callback_query_handler(lambda c: c.data == 'next_habit', state=Report.habits_report)
+async def process_habits_next(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
@@ -640,23 +742,33 @@ async def add_report_data3(callback_query: types.CallbackQuery, state: FSMContex
 
     if user_goals and user_goals[0]:
         goals = user_goals[0].split(',')
-        await bot.send_message(callback_query.from_user.id, "4) К каким целям ты стал ближе? (можно ничего не выбрать)",
+        await bot.send_message(callback_query.from_user.id, "4) К каким целям ты стал ближе? (можно ничего не выбрать)"
+                                                            "По окончании выбора нажми кнопку Дальше",
                                reply_markup=create_goals_keyboard(goals))
-        await state.set_state(Report.goals_report)
-        # После отправки клавиатуры выбора целей нам не нужно вызывать save_report_and_finalize
-        return
     else:
         await bot.send_message(callback_query.from_user.id, "У тебя нет сохранённых целей!")
-        await save_report_and_finalize(user_id, state)
 
+    await state.set_state(Report.goals_report)
 
 
 # Обработчик для пропуска выбора привычек
-@dp.callback_query_handler(lambda c: c.data == 'habit_skip', state=Report.habits_report)
+@dp.callback_query_handler(lambda c: c.data == 'skip_habit', state=Report.habits_report)
 async def skip_habits_selection(callback_query: types.CallbackQuery, state: FSMContext):
     await callback_query.answer("Выбор привычек пропущен.")
-    await bot.send_message(callback_query.from_user.id, "4) К каким целям ты стал ближе? (можно ничего не выбрать)",
-                           reply_markup=create_goals_keyboard([]))
+    user_id = callback_query.from_user.id
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT goals FROM users WHERE user_id = ?', (user_id,))
+    user_goals = cursor.fetchone()
+    conn.close()
+
+    if user_goals and user_goals[0]:
+        goals = user_goals[0].split(',')
+        await bot.send_message(callback_query.from_user.id, "4) К каким целям ты стал ближе? (можно ничего не выбрать)"
+                                                            "По окончании выбора нажми кнопку Дальше",
+                               reply_markup=create_goals_keyboard(goals))
+    else:
+        await bot.send_message(callback_query.from_user.id, "У тебя нет сохранённых целей!")
     await state.set_state(Report.goals_report)
 
 
@@ -668,47 +780,119 @@ async def process_goals_report(callback_query: types.CallbackQuery, state: FSMCo
             data['goals'] = []
 
         goal = callback_query.data.split('_')[1]
+        data['goals'].append(goal)
 
-        # Проверяем, выбрана ли цель или нажата кнопка "Пропустить"
-        if goal != "skip":
-            data['goals'].append(goal)
-            await callback_query.answer("Цель отмечена!")
-            await save_report_and_finalize(callback_query.from_user.id, state)
-        else:
-            await callback_query.answer("Пропущен выбор цели.")
-            await save_report_and_finalize(callback_query.from_user.id, state)
+    await callback_query.answer("Цель отмечена!")
 
 
-# сохранение отчета и завершение
+# Обработчик для кнопки "Дальше"
+@dp.callback_query_handler(lambda c: c.data == 'next_goal', state=Report.goals_report)
+async def next_goal_selection(callback_query: types.CallbackQuery, state: FSMContext):
+    await save_report_and_finalize(callback_query.from_user.id, state)
+
+
+# Обработчик для кнопки "Пропустить"
+@dp.callback_query_handler(lambda c: c.data == 'skip_goal', state=Report.goals_report)
+async def skip_goal_selection(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer("Пропущен выбор целей.")
+    await save_report_and_finalize(callback_query.from_user.id, state)
+
+
+# Функция для сохранения отчета и завершения процесса
 async def save_report_and_finalize(user_id, state):
     async with state.proxy() as data:
-
-        # chosen_date = data['chosen_date']
-        skill = data['skill']
-        # proficiency_type = data['proficiency_type']
-        time_spent = data['time_spent']
-        chosen_habits = data['habits']
-        all_habits = data['all_habits']
+        skills = data.get('skills', [])
+        time_spent = data.get('time_spent', 0)
+        chosen_habits = data.get('habits', [])
+        all_habits = data.get('all_habits', [])
         chosen_goals = data.get('goals', [])
+        chosen_date = data.get('chosen_date')
 
-    # Определение соблюденных и несоблюденных привычек
+    # Подключение к базе данных
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+
+    # Получение данных пользователя
+    cursor.execute('SELECT birth FROM users WHERE user_id = ?', (user_id,))
+    birth_date_str = cursor.fetchone()[0]
+    lvl, xp, total_days_in_year = calculate_level_and_xp(birth_date_str)
+
+    # Обновление навыков
+    if skills:
+        for skill in skills:
+            cursor.execute('SELECT xp FROM skills WHERE user_id = ? AND skill_name = ?', (user_id, skill))
+            skill_xp = cursor.fetchone()
+            if skill_xp:
+                new_skill_xp = skill_xp[0] + time_spent
+                cursor.execute('UPDATE skills SET xp = ? WHERE user_id = ? AND skill_name = ?', (new_skill_xp, user_id, skill))
+            else:
+                cursor.execute('INSERT INTO skills (user_id, skill_name, xp) VALUES (?, ?, ?)', (user_id, skill, time_spent))
+        conn.commit()
+
+    # Обновление привычек
+    new_habit_progresses = {}
+    if chosen_habits:
+        for habit in chosen_habits:
+            cursor.execute('SELECT progress FROM habits WHERE user_id = ? AND habit_name = ?', (user_id, habit))
+            habit_progress = cursor.fetchone()
+            if habit_progress:
+                new_habit_progress = habit_progress[0] + 1
+                new_habit_progresses[habit] = new_habit_progress
+                cursor.execute('UPDATE habits SET progress = ? WHERE user_id = ? AND habit_name = ?', (new_habit_progress, user_id, habit))
+            else:
+                new_habit_progresses[habit] = 1
+                cursor.execute('INSERT INTO habits (user_id, habit_name, progress) VALUES (?, ?, ?)', (user_id, habit, 1))
+        conn.commit()
+
+    if all_habits:
+        for habit in all_habits:
+            if habit not in chosen_habits:
+                cursor.execute('SELECT progress FROM habits WHERE user_id = ? AND habit_name = ?', (user_id, habit))
+                habit_progress = cursor.fetchone()
+                if habit_progress:
+                    new_habit_progress = habit_progress[0] - 2
+                    new_habit_progresses[habit] = new_habit_progress
+                    cursor.execute('UPDATE habits SET progress = ? WHERE user_id = ? AND habit_name = ?', (new_habit_progress, user_id, habit))
+                else:
+                    new_habit_progresses[habit] = -2
+                    cursor.execute('INSERT INTO habits (user_id, habit_name, progress) VALUES (?, ?, ?)', (user_id, habit, -2))
+        conn.commit()
+
+    # Обновление целей
+    if chosen_goals:
+        for goal in chosen_goals:
+            cursor.execute('SELECT progress FROM goals WHERE user_id = ? AND goal_name = ?', (user_id, goal))
+            goal_progress = cursor.fetchone()
+            if goal_progress:
+                new_goal_progress = goal_progress[0] + 1
+                if new_goal_progress >= 100:
+                    # Если цель достигнута, задать вопрос пользователю
+                    await bot.send_message(user_id, f"Ты достиг своей цели: {goal}? (да/нет)")
+                    async with state.proxy() as data:
+                        data['goal_to_check'] = goal
+                    await state.set_state(Report.check_goal)
+                else:
+                    cursor.execute('UPDATE goals SET progress = ? WHERE user_id = ? AND goal_name = ?', (new_goal_progress, user_id, goal))
+            else:
+                cursor.execute('INSERT INTO goals (user_id, goal_name, progress) VALUES (?, ?, ?)', (user_id, goal, 1))
+        conn.commit()
+
+    # Формирование итогового сообщения
+    final_message = f"Итог:\n"
+    if skills:
+        final_message += f"Навыки: {', '.join([f'{skill} + {time_spent} ХР + 1 Lvl' for skill in skills])}\n"
+    else:
+        final_message += "Навыки: не выбраны\n"
+
     observed_habits = [habit for habit in chosen_habits]
     not_observed_habits = [habit for habit in all_habits if habit not in chosen_habits]
 
-    # Получение текущей даты и количества дней в текущем месяце
-    today = datetime.now()
-    current_day = today.day
-    days_in_month = (datetime(today.year, today.month % 12 + 1, 1) - datetime(today.year, today.month, 1)).days
+    if observed_habits:
+        final_message += f"Соблюдены привычки: {', '.join([f'{habit} {new_habit_progresses[habit]}/{30}' for habit in observed_habits])}\n"
+    if not_observed_habits:
+        final_message += f"Не соблюдены привычки: {', '.join([f'{habit} {new_habit_progresses[habit]}/{30}' for habit in not_observed_habits])}\n"
 
-    # Формирование итогового сообщения
-    final_message = (
-        f"Итог\n"
-        f"Навык: {skill} + {time_spent} ХР + 1 Lvl\n"
-        f"Соблюдены привычки: {', '.join(observed_habits)}\n"
-        f"Не соблюдены: {', '.join(not_observed_habits)}\n"
-        f"Прогресс выполнения привычки: {current_day}/{days_in_month} дней\n"
-        f"Приближение к цели: {', '.join([goal + ' + 1%' for goal in chosen_goals])}\n"
-    )
+    final_message += f"Приближение к целям: {', '.join([f'{goal} +1%' for goal in chosen_goals])}\n"
 
     # Создание клавиатуры подтверждения
     keyboard = InlineKeyboardMarkup(row_width=2)
@@ -719,17 +903,48 @@ async def save_report_and_finalize(user_id, state):
     await bot.send_message(user_id, final_message, reply_markup=keyboard)
 
 
+
+# Обработчик для проверки достижения цели
+@dp.message_handler(state=Report.check_goal)
+async def check_goal(message: types.Message, state: FSMContext):
+    async with state.proxy() as data:
+        goal = data['goal_to_check']
+
+    if message.text.lower() == 'да':
+        await bot.send_message(message.chat.id, f"Поздравляем! Цель '{goal}' достигнута и будет добавлена в раздел достигнутых целей.")
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM goals WHERE user_id = ? AND goal_name = ?', (message.from_user.id, goal))
+        conn.commit()
+        conn.close()
+    else:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        cursor.execute('UPDATE goals SET progress = 50 WHERE user_id = ? AND goal_name = ?', (message.from_user.id, goal))
+        conn.commit()
+        conn.close()
+        await bot.send_message(message.chat.id, f"Цель '{goal}' возвращена на 50%.")
+
+    await state.finish()
+
+
 @dp.callback_query_handler(lambda c: c.data == 'report_accept', state='*')
 async def process_report_accept(callback_query: types.CallbackQuery, state: FSMContext):
     async with state.proxy() as data:
         user_id = callback_query.from_user.id
         chosen_date = data['chosen_date']
-        skill = data['skill']
+        skills = data['skills']
         proficiency_type = data['proficiency_type']
         time_spent = data['time_spent']
         chosen_habits = data['habits']
         all_habits = data['all_habits']
         chosen_goals = data.get('goals', [])
+
+    # Преобразование списков в строки
+    skills_str = ','.join(skills)
+    chosen_habits_str = ','.join(chosen_habits)
+    all_habits_str = ','.join([habit for habit in all_habits if habit not in chosen_habits])
+    chosen_goals_str = ','.join(chosen_goals)
 
     # Сохранение данных в базу
     conn = sqlite3.connect('users.db')
@@ -738,13 +953,14 @@ async def process_report_accept(callback_query: types.CallbackQuery, state: FSMC
         INSERT INTO reports (user_id, report_date, skill, proficiency_type, time_spent,
          habits_observed, habits_not_observed, goals_achieved)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, chosen_date, skill, proficiency_type,
-          time_spent, ','.join([habit for habit in chosen_habits]), ','.join([habit for habit in all_habits if habit not in chosen_habits]), ','.join(chosen_goals)))
+    ''', (user_id, chosen_date, skills_str, proficiency_type,
+          time_spent, chosen_habits_str, all_habits_str, chosen_goals_str))
     conn.commit()
     conn.close()
 
     await bot.send_message(callback_query.from_user.id, "Отчёт сохранён.")
     await state.finish()
+
 
 @dp.callback_query_handler(lambda c: c.data == 'report_cancel', state='*')
 async def process_report_cancel(callback_query: types.CallbackQuery, state: FSMContext):
@@ -752,21 +968,10 @@ async def process_report_cancel(callback_query: types.CallbackQuery, state: FSMC
     await state.finish()
 
 
-# Таймер для отправки напоминания о целях
-# Проверить настройку функции
-#async def send_goal_reminder(user_id, state):
-#    await asyncio.sleep(10)
-#    async with state.proxy() as data:
-#        if 'goals' not in data or not data['goals']:
-#            await bot.send_message(user_id, "Дружок! Цели сами себя не достигнут, вставай с дивана!")
-#            await save_report_and_finalize(user_id, state)
-
-
 @dp.callback_query_handler(lambda c: c.data == 'back')
 async def process_callback_back(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
     await bot.send_message(callback_query.from_user.id, "Выбор действия:", reply_markup=secondary_kb)
-    # Вызов главного меню или другой необходимой логики
 
 
 # Обработчик для кнопки "Назад" при просмотре отчетов
