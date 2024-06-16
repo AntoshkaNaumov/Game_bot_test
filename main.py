@@ -16,7 +16,7 @@ from keyboards import create_proficiency_type_keyboard, create_skills_keyboard, 
 from state import UserInfo, Report, ChangeStats
 
 
-API_TOKEN = '5724887015:AAGJQvbUtyvGkl-nzGJc-6DypgEH6jjqWao'
+API_TOKEN = '5614902466:AAG5AcR0rd5Yrl-myulxQKQLJvR1n0O6ydI'
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
